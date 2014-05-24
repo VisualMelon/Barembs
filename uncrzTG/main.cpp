@@ -685,6 +685,10 @@ public:
 
 	D3DXMATRIX lightViewProj;
 
+	UNCRZ_bbox decalBox;
+	bool allowSkip; // allow stuff to skip this light if the light thinks it won't shine on them
+	bool curDrawSkip;
+
 	void init(LPDIRECT3DDEVICE9 dxDevice, char* lightPatternFile, std::vector<UNCRZ_texture*>* textureList)
 	{
 		createTexture(dxDevice, lightPatternFile, &lightPatternTex, textureList);
@@ -694,6 +698,22 @@ public:
 		lightDir.x /= ldMod;
 		lightDir.y /= ldMod;
 		lightDir.z /= ldMod;
+	}
+
+	void updateBox()
+	{
+		decalBox = UNCRZ_bbox(); // empty
+	}
+
+	bool canSkip(UNCRZ_bbox* bbox)
+	{
+		if (!allowSkip)
+			return false;
+
+		if (decalBox.empty == false && !decalBox.overlap(bbox))
+			return true;
+
+		return false;
 	}
 
 	void release()
@@ -2366,6 +2386,8 @@ skipPlainDecalPass:
 
 		effect.effect->End();
 
+		dxDevice->SetRenderState(D3DRS_ALPHABLENDENABLE, FALSE);
+
 		/*effect.effect->Begin(&numPasses, 0);
 
 		for (pass = 0; pass < numPasses; pass++)
@@ -2397,7 +2419,70 @@ skipPlainDecalPass:
 
 		effect.effect->End();*/
 
+		// dynamic decals (DO NOT GET CONFUSED WITH LIGHTS) - wow: so untested
+skipToDynamicDecals:
+		if (ddat->dynamicDecalDatas.size() == 0)
+			return;
+
+		//ddat->startTimer(true);
+
+		// disable z write
+		dxDevice->SetRenderState(D3DRS_ZWRITEENABLE, false);
+
+		effect.setTechnique(dynamicDecalTech);
+		
+		effect.effect->Begin(&numPasses, 0);
+
+		if (numPasses > 0 && (drawArgs & DF_light) == false)
+		{
+			// enable blend
+			dxDevice->SetRenderState(D3DRS_ALPHABLENDENABLE, TRUE);
+			dxDevice->SetRenderState(D3DRS_BLENDOP, D3DBLENDOP_ADD);
+			dxDevice->SetRenderState(D3DRS_SRCBLEND, D3DBLEND_SRCALPHA);
+			dxDevice->SetRenderState(D3DRS_DESTBLEND, D3DBLEND_INVSRCALPHA);
+
+			// dynamic decal pass
+			for (int dddi = ddat->dynamicDecalDatas.size() - 1; dddi >= 0; dddi--)
+			{
+				dynamicDecalData* ddd = ddat->dynamicDecalDatas[dddi];
+				
+				if (!ddd->decalEnabled)
+					continue;
+
+				effect.setDynamicDecalData(ddd);
+				effect.effect->CommitChanges();
+
+				effect.effect->BeginPass((int)ddd->lightType);
+
+				for (int i = count - 1; i >= 0; i--)
+				{
+					UNCRZ_section* curSec = arr[i]->sections[secIndex];
+					if (ddd->canSkip(&arr[i]->modelBox))
+						continue;
+
+					effect.setcolMod(&arr[i]->sections[secIndex]->colMod.x);
+					effect.setTransArr(arr[i]->transArr);
+
+					effect.effect->CommitChanges();
+
+					res = dxDevice->DrawIndexedPrimitive(D3DPT_TRIANGLELIST, 0, 0, numVertices, vOffset, vLen);
+					if (res != D3D_OK)
+						res = res;
+				}
+
+				effect.effect->EndPass();
+			}
+
+		}
+		// disable blend
 		dxDevice->SetRenderState(D3DRS_ALPHABLENDENABLE, FALSE);
+
+		// re-enable z write
+		dxDevice->SetRenderState(D3DRS_ZWRITEENABLE, true);
+		
+		//ddat->stopTimer(1, true, "DynDecals: ", GDOF_dms);
+
+		effect.effect->End();
 	}
 
 	void draw(LPDIRECT3DDEVICE9 dxDevice, UNCRZ_trans_arr* transArr, drawData* ddat, DWORD drawArgs)
@@ -2732,7 +2817,7 @@ skipToDynamicDecals:
 			{
 				dynamicDecalData* ddd = ddat->dynamicDecalDatas[dddi];
 				
-				if (!ddd->decalEnabled)
+				if (!ddd->decalEnabled || ddd->curDrawSkip)
 					continue;
 
 				effect.setDynamicDecalData(ddd);
@@ -3542,6 +3627,11 @@ notOcced:
 	for (int i = ddat->lightDatas.size() - 1; i >= 0; i--)
 	{
 		ddat->lightDatas[i]->curDrawSkip = ddat->lightDatas[i]->canSkip(&modelBox);
+	}
+
+	for (int i = ddat->dynamicDecalDatas.size() - 1; i >= 0; i--)
+	{
+		ddat->dynamicDecalDatas[i]->curDrawSkip = ddat->dynamicDecalDatas[i]->canSkip(&modelBox);
 	}
 
 	int len = sections.size();
@@ -12703,7 +12793,6 @@ void initLights(LPDIRECT3DDEVICE9 dxDevice)
 {
 	// note that lightColMod W value is not really used by the simple shaders
 
-	dynamicDecalData* ddd;
 	lightData* ld;
 
 	ld = new lightData("pointlight");
@@ -12737,8 +12826,11 @@ void initLights(LPDIRECT3DDEVICE9 dxDevice)
 
 		lights.push_back(ld);
 
+		// testing
+		dynamicDecalData* ddd;
 		ddd = new dynamicDecalData();
 
+		ddd->decalEnabled = false;
 		ddd->lightType = LT_ortho;
 		ddd->lightDepth = 200;
 		ddd->lightDir = D3DXVECTOR4(0, -1, 0, 0.0);
@@ -12748,7 +12840,6 @@ void initLights(LPDIRECT3DDEVICE9 dxDevice)
 		ddd->dimY = 20;
 		ddd->lightColMod = D3DXVECTOR4(1.0, 1.0, 1.0, 1);
 		ddd->init(dxDevice, "b_ring.tga", &textures);
-		ddd->decalEnabled = true;
 
 		dynamicDecals.push_back(ddd);
 	}
