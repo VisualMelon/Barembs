@@ -38827,15 +38827,15 @@ sec one
 
 shader_dx9 un_shade.fx
 colmod 1 1 1 1
-technique simpleTex_test
+technique simpleTex
 technique_light simpleTex_light
 technique_decal simple_decal
 technique_dyndecal simpleTex_dynamicdecal
 technique_over over
-texture white.tga
+texture purewhite.tga
 lighting full
 dyndecals nodraw
-alpha nice
+alpha none
 
 f 0 2 1
 f 3 5 4

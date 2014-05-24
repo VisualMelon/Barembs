@@ -10638,6 +10638,7 @@ void handleUiAfter(uiEvent* uie)
 				D3DXSaveTextureToFile("meh0.bmp", D3DXIFF_BMP, views[0]->targetTex, NULL);
 				D3DXSaveTextureToFile("meh1.bmp", D3DXIFF_BMP, views[1]->targetTex, NULL);
 				D3DXSaveTextureToFile("meh2.bmp", D3DXIFF_BMP, views[2]->targetTex, NULL);
+				D3DXSaveTextureToFile("mehOver.bmp", D3DXIFF_BMP, overs[0]->targetTex, NULL);
 				//D3DXSaveTextureToFile("meh3.bmp", D3DXIFF_BMP, views[3]->targetTex, NULL);
 //				D3DXSaveTextureToFile("mehTarget.bmp", D3DXIFF_BMP, targetTex, NULL);
 //				D3DXSaveTextureToFile("mehMainV.bmp", D3DXIFF_BMP, views[0]->targetTex, NULL);
@@ -11131,7 +11132,7 @@ void initUi(LPDIRECT3DDEVICE9 dxDevice)
 	rect.right = winWidth;// + 1;
 	rect.top = 0;
 	rect.bottom = winHeight;// + 1;
-	tempTex = new uiTexItem(dxDevice, "mainover", NULL, vertexDecPCT, "un_shade.fx", "over_final_flatalpha", "over_main", rect, &mainUiem, &effects, &textures);	
+	tempTex = new uiTexItem(dxDevice, "mainover", NULL, vertexDecPCT, "un_shade.fx", "over_final", "over_main", rect, &mainUiem, &effects, &textures);	
 	tempTex->clickable = true;
 	uiItems.push_back(tempTex);
 	tempTex->colMod = D3DXVECTOR4(1, 1, 1, 1);
@@ -12537,13 +12538,19 @@ void drawOver(LPDIRECT3DDEVICE9 dxDevice, drawData* ddat, UNCRZ_over* over)
 	D3DXMATRIX idMat;
 	D3DXMatrixIdentity(&idMat);
 	dxDevice->SetRenderTarget(0, ddat->targetSurface);
-	dxDevice->SetDepthStencilSurface(over->zSurface);
+	//dxDevice->SetDepthStencilSurface(over->zSurface);
 
+	if (over->clearView)
+		dxDevice->Clear(0, NULL, D3DCLEAR_TARGET, over->clearColor, 1.0f, 0);
+	//dxDevice->Clear(0, NULL, D3DCLEAR_ZBUFFER, D3DCOLOR_XRGB(0, 0, 0), 1.0f, 0);
+	
 	D3DVIEWPORT9 vp = createViewPort(over->texWidth, over->texHeight);
 	dxDevice->SetViewport(&vp);
 
 	dxDevice->SetRenderState(D3DRS_FILLMODE, D3DFILL_SOLID);
 	setOverStates(dxDevice);
+
+	ddat->disableClip(dxDevice);
 
 	dxDevice->BeginScene();
 
@@ -12568,10 +12575,13 @@ void drawOver(LPDIRECT3DDEVICE9 dxDevice, drawData* ddat, UNCRZ_over* over)
 	over->effect.setTicker(ddat->ticker);
 	over->effect.effect->SetTechnique(over->overTech);
 	over->effect.setViewProj(&idMat);
-	over->effect.effect->CommitChanges();
 	over->effect.setcolMod(over->colMod);
 
 	setAlpha(dxDevice, over->alphaMode);
+
+	over->effect.effect->CommitChanges();
+
+	dxDevice->SetVertexDeclaration(vertexDecOver);
 
 	UINT numPasses;
 	over->effect.effect->Begin(&numPasses, 0);
@@ -12579,7 +12589,6 @@ void drawOver(LPDIRECT3DDEVICE9 dxDevice, drawData* ddat, UNCRZ_over* over)
 	{
 		over->effect.effect->BeginPass(i);
 
-		dxDevice->SetVertexDeclaration(vertexDecOver);
 		dxDevice->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, overVerts, sizeof(vertexOver));
 
 		over->effect.effect->EndPass();

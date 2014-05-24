@@ -1586,17 +1586,17 @@ PS_Output PShade_Over_Final_Fun(VS_Output_Over inp)
 	float2 tcoords = inp.txc;
 
 	float off = 3.0;
-	outp.col = outp.col + tex2D(targTexNonMipLinearSampler, tcoords) * (1.0 - prop + qprop);
+	outp.col = outp.col + tex2D(texNonMipLinearSampler, tcoords) * (1.0 - prop + qprop);
 
 	tcoords.x += texData.x * 1.0 * off;
-	outp.col = outp.col + tex2D(targTexNonMipLinearSampler, tcoords) * qprop;
+	outp.col = outp.col + tex2D(texNonMipLinearSampler, tcoords) * qprop;
 	tcoords.x -= texData.x * 2.0 * off;
-	outp.col = outp.col + tex2D(targTexNonMipLinearSampler, tcoords) * qprop;
+	outp.col = outp.col + tex2D(texNonMipLinearSampler, tcoords) * qprop;
 	tcoords.x += texData.x * 1.0 * off;
 	tcoords.y += texData.y * 1.0 * off;
-	outp.col = outp.col + tex2D(targTexNonMipLinearSampler, tcoords) * qprop;
+	outp.col = outp.col + tex2D(texNonMipLinearSampler, tcoords) * qprop;
 	tcoords.y -= texData.y * 2.0 * off;
-	outp.col = outp.col + tex2D(targTexNonMipLinearSampler, tcoords) * qprop;
+	outp.col = outp.col + tex2D(texNonMipLinearSampler, tcoords) * qprop;
 
 	outp.col.w = 1;
 	return outp;
