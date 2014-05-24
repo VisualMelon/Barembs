@@ -2289,8 +2289,10 @@ skipPlainPass:
 
 		effect.effect->End();*/
 
-		if (drawDecals == false || drawArgs & DF_light)
+		if (drawArgs & DF_light)
 			return; // no decals for light
+		if (drawDecals == false)
+			goto skipToDynamicDecals;
 
 		// decals
 		dxDevice->SetVertexDeclaration(vertexDecPAT4);
@@ -2457,7 +2459,7 @@ skipToDynamicDecals:
 				for (int i = count - 1; i >= 0; i--)
 				{
 					UNCRZ_section* curSec = arr[i]->sections[secIndex];
-					if (ddd->canSkip(&arr[i]->modelBox))
+					if (ddd->canSkip(&arr[i]->modelBox) || curSec->drawDynamicDecals == false)
 						continue;
 
 					effect.setcolMod(&arr[i]->sections[secIndex]->colMod.x);
