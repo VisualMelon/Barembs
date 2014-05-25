@@ -1067,6 +1067,46 @@ PS_Output PShade_Tex_Test2(VS_Output_Water inp)
 }
 /// END TEST CODE
 
+PS_Output PShade_Tex_Test2_LitOrtho(VS_Output_Tex inp)
+{
+	clip(-1);
+	return (PS_Output)0;
+}
+
+PS_Output PShade_Tex_Test2_LitPersp(VS_Output_Tex inp)
+{
+	clip(-1);
+	return (PS_Output)0;
+}
+
+PS_Output PShade_Tex_Test2_LitPoint(VS_Output_Tex inp)
+{
+	PS_Output outp = (PS_Output)0;
+
+	inp.txc.x += ticker * 0.1;
+	inp.txc.y += sin(ticker * 0.1);
+	float4 rippleDat = tex2D(texSampler, inp.txc);
+
+	float4 nrm = rippleDat;
+
+	inp.altPos = lightUnTransPersp(inp.altPos);
+	float4 pos = inp.altPos;
+
+	float4 plDir = pos - lightPos;
+	plDir = normaliseXYZ(plDir);
+	float4 eDir = pos - eyePos; // eyeDir just doesn't cut it
+	eDir = normaliseXYZ(eDir);
+
+	plDir.w = 0; // need a zero w for the dot
+	float res = -dot(plDir, reflect(eDir, nrm)); // reflectivness
+
+ 	outp.col = res * colMod;
+
+	outp.col.w = 0;
+
+	return outp;
+}
+
 /// TEST CODE
 PS_Output PShade_Tex_Test3(VS_Output_Tex inp)
 {
@@ -1124,6 +1164,50 @@ PS_Output PShade_Tex_Lit##lightName##(VS_Output_Tex inp) \
 STD_MCR_PShade_Tex_Lit(Ortho)
 STD_MCR_PShade_Tex_Lit(Persp)
 STD_MCR_PShade_Tex_Lit(Point)
+
+
+PS_Output PShade_Tex_Alpha(VS_Output_Tex inp)
+{
+	PS_Output outp = (PS_Output)0;
+	outp.col = inp.col * tex2D(texSampler, inp.txc);
+
+	clip(outp.col.w - 0.5);
+
+	outp.col = outp.col * colMod;
+	float alphaPreserve = outp.col.w;
+
+	outp.col = outp.col * (1.0 - lightCoof);
+
+	outp.col *= alphaPreserve;
+	outp.col.w = alphaPreserve;
+
+	return outp;
+}
+
+// PShade_Tex_Lit
+#define STD_MCR_PShade_Tex_Alpha_Lit(lightName) \
+PS_Output PShade_Tex_Alpha_Lit##lightName##(VS_Output_Tex inp) \
+{ \
+	PS_Output outp = (PS_Output)0; \
+	outp.col = inp.col * tex2D(texSampler, inp.txc); \
+ \
+	clip(outp.col.w - 0.5); \
+ \
+	float4 lightMod = calcLightMod##lightName##(inp.lmc); \
+ \
+	outp.col = outp.col * colMod; \
+	float alphaPreserve = outp.col.w; \
+ \
+	outp.col = outp.col * (lightMod * inp.lit + lightAmbient) * lightCoof; \
+ \
+	outp.col *= alphaPreserve; \
+	outp.col.w = 0; \
+	return outp; \
+}
+
+STD_MCR_PShade_Tex_Alpha_Lit(Ortho)
+STD_MCR_PShade_Tex_Alpha_Lit(Persp)
+STD_MCR_PShade_Tex_Alpha_Lit(Point)
 
 
 PS_Output PShade_Sprite(VS_Output_Tex inp)
@@ -1326,11 +1410,33 @@ PS_Output PShade_LightPoint(VS_Output_Light inp)
 
 
 
-
-// clips translucent stuff (these don't work, need to ADAPTED for individual use, with a new set of VShades)
+/*
 // PShade_Tex_Light
 #define STD_MCR_PShade_Tex_Light(lightName) \
 PS_Output PShade_Tex_Light##lightName##(VS_Output_Tex inp) \
+{ \
+	float4 testCol = inp.col * tex2D(texSampler, inp.txc); \
+ \
+	float alphaPreserve = testCol.w; \
+ \
+	inp.altPos = lightUnTrans##lightName##(inp.altPos); \
+ \
+	float num = inp.altPos.z; \
+	PS_Output outp = (PS_Output)0; \
+	outp.col.x = num; \
+ \
+	return outp; \
+}
+
+STD_MCR_PShade_Tex_Light(Ortho)
+STD_MCR_PShade_Tex_Light(Persp)
+STD_MCR_PShade_Tex_Light(Point)
+*/
+
+
+// PShade_Tex_Alpha_Light
+#define STD_MCR_PShade_Tex_Alpha_Light(lightName) \
+PS_Output PShade_Tex_Alpha_Light##lightName##(VS_Output_Tex inp) \
 { \
 	float4 testCol = inp.col * tex2D(texSampler, inp.txc); \
  \
@@ -1346,9 +1452,9 @@ PS_Output PShade_Tex_Light##lightName##(VS_Output_Tex inp) \
 	return outp; \
 }
 
-STD_MCR_PShade_Tex_Light(Ortho)
-STD_MCR_PShade_Tex_Light(Persp)
-STD_MCR_PShade_Tex_Light(Point)
+STD_MCR_PShade_Tex_Alpha_Light(Ortho)
+STD_MCR_PShade_Tex_Alpha_Light(Persp)
+STD_MCR_PShade_Tex_Alpha_Light(Point)
 
 
 VS_Output_Terrain VShade_Terrain(VS_Input_Terrain inp)
@@ -1978,6 +2084,33 @@ technique simpleTex
 	}
 }
 
+technique simpleTex_alpha
+{
+	pass unlit
+	{
+		VertexShader = compile vs_2_0 VShade_Tex();
+		PixelShader = compile ps_2_0 PShade_Tex_Alpha();
+	}
+
+	pass litortho
+	{ // LitOrtho
+		VertexShader = compile vs_2_0 VShade_Tex_LitOrtho();
+		PixelShader = compile ps_2_0 PShade_Tex_Alpha_LitOrtho();
+	}
+
+	pass litpersp
+	{ // LitPersp
+		VertexShader = compile vs_2_0 VShade_Tex_LitPersp();
+		PixelShader = compile ps_2_0 PShade_Tex_Alpha_LitPersp();
+	}
+
+	pass litpoint
+	{ // LitPoint
+		VertexShader = compile vs_2_0 VShade_Tex_LitPoint();
+		PixelShader = compile ps_2_0 PShade_Tex_Alpha_LitPoint();
+	}
+}
+
 /// TEST CODE
 technique simpleTex_test
 {
@@ -2018,20 +2151,20 @@ technique simpleTex_test2
 
 	pass litortho
 	{ // LitOrtho
-		VertexShader = compile vs_2_0 VShade_Tex_LitOrtho();
-		PixelShader = compile ps_2_0 PShade_Tex_LitOrtho();
+		VertexShader = compile vs_2_0 VShade_Tex();
+		PixelShader = compile ps_2_0 PShade_Tex_Test2_LitOrtho();
 	}
 
 	pass litpersp
 	{ // LitPersp
-		VertexShader = compile vs_2_0 VShade_Tex_LitPersp();
-		PixelShader = compile ps_2_0 PShade_Tex_LitPersp();
+		VertexShader = compile vs_2_0 VShade_Tex();
+		PixelShader = compile ps_2_0 PShade_Tex_Test2_LitPersp();
 	}
 
 	pass litpoint
 	{ // LitPoint
-		VertexShader = compile vs_2_0 VShade_Tex_LitPoint();
-		PixelShader = compile ps_2_0 PShade_Tex_LitPoint();
+		VertexShader = compile vs_2_0 VShade_Tex();
+		PixelShader = compile ps_2_0 PShade_Tex_Test2_LitPoint();
 	}
 }
 /// END TEST CODE
@@ -2054,6 +2187,27 @@ technique simpleTex_light
 	{ // LightPoint - this shoudln't do anthing.... it should never be called!
 		VertexShader = compile vs_2_0 VShade_Tex_LightPoint();
 		PixelShader = compile ps_2_0 PShade_LightPoint();
+	}
+}
+
+technique simpleTex_alpha_light
+{
+	pass lightortho
+	{ // LightOrtho
+		VertexShader = compile vs_2_0 VShade_Tex_LightOrtho();
+		PixelShader = compile ps_2_0 PShade_Tex_Alpha_LightOrtho(); // no trans
+	}
+
+	pass lightpersp
+	{ // LightPersp
+		VertexShader = compile vs_2_0 VShade_Tex_LightPersp();
+		PixelShader = compile ps_2_0 PShade_Tex_Alpha_LightPersp();
+	}
+
+	pass lightpoint
+	{ // LightPoint - this shoudln't do anthing.... it should never be called!
+		VertexShader = compile vs_2_0 VShade_Tex_LightPoint();
+		PixelShader = compile ps_2_0 PShade_Tex_Alpha_LightPoint();
 	}
 }
 

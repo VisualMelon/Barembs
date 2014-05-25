@@ -9818,6 +9818,9 @@ std::vector<UNCRZ_obj*> objs; // stuff you may want to access
 std::vector<UNCRZ_obj*> zSortedObjs; // for anything that needs to be drawn back-to-front
 std::vector<int> zsoLocalIndexes;
 
+UNCRZ_model* tree0model;
+std::vector<UNCRZ_model*> tree0Arr;
+
 UNCRZ_sprite_buffer sbuff;
 
 UNCRZ_sprite* fireSprite;
@@ -10174,7 +10177,7 @@ int WINAPI WinMain(HINSTANCE hInstance,
 
 	mainDxDevice = initDevice(hWnd);
 	initVertexDec(mainDxDevice);
-	initEffect(mainDxDevice); // Enable to test for shader errors
+	//initEffect(mainDxDevice); // Enable to test for shader errors
 	initTextures(mainDxDevice); // want to do this early, everything relies on this setup
 	initViews(mainDxDevice);
 	initOvers(mainDxDevice);
@@ -11607,6 +11610,23 @@ void initEffect(LPDIRECT3DDEVICE9 dxDevice)
 	aeffect = createEffect(dxDevice, "un_shade.fx", VX_PCT, "un_shade.fx", &effects);
 }
 
+float altitude(float x, float minY, float z)
+{
+	float top = 100;
+	D3DXVECTOR3 rayPos(x, 100, z);
+	D3DXVECTOR3 rayDir(0, -1, 0);
+	float distRes;
+
+	if (mapObj->model->collides(&rayPos, &rayDir, &distRes))
+	{
+		return 100 - distRes - minY;
+	}
+	else
+	{
+		return -1;
+	}
+}
+
 int rnd(int top)
 {
 	return rand() % top;
@@ -11638,27 +11658,33 @@ void initObjs(LPDIRECT3DDEVICE9 dxDevice)
 
 	UNCRZ_obj* temp;
 
-	getModel(&models, "anubis")->changeAnim(getFBF_anim(&anims, "anubis_spin"));
+	/*getModel(&models, "anubis")->changeAnim(getFBF_anim(&anims, "anubis_spin"));
 	temp = new UNCRZ_obj(new UNCRZ_model(getModel(&models, "anubis")));
 	//temp->changeAnim(getFBF_anim(&anims, "anubis_spin"));
 	temp->offset = D3DXVECTOR3(0, -2, 0);
 	temp->update(true);
 	objs.push_back(temp);
-	zSortedObjs.push_back(temp);
+	zSortedObjs.push_back(temp);*/
 
-	temp = new UNCRZ_obj(new UNCRZ_model(getModel(&models, "anubis")));
-	//temp->changeAnim(getFBF_anim(&anims, "anubis_spin"));
-	temp->offset = D3DXVECTOR3(15, -2, 0);
-	temp->update(true);
-	objs.push_back(temp);
-	zSortedObjs.push_back(temp);
+	tree0model = getModel(&models, "tree0");
+	tree0model->changeAnim(getFBF_anim(&anims, "tree0_idle"));
+	for (int i = 0; i < 1000; i++)
+	{
+		temp = new UNCRZ_obj(new UNCRZ_model(tree0model));
 
-	temp = new UNCRZ_obj(new UNCRZ_model(getModel(&models, "anubis")));
-	//temp->changeAnim(getFBF_anim(&anims, "anubis_spin"));
-	temp->offset = D3DXVECTOR3(0, -2, 15);
-	temp->update(true);
-	objs.push_back(temp);
-	zSortedObjs.push_back(temp);
+again:
+		temp->offset = D3DXVECTOR3((float)(rnd(3001) - 1500) / 10.0,  0, (float)(rnd(3001) - 1500) / 10.0);
+		float a;
+		if ((a = altitude(temp->offset.x, 0, temp->offset.z)) < 0.1)
+			goto again;
+
+		temp->offset.y = a;
+		temp->rotation.y = (float)rnd(314159) / 5000.0;
+
+		temp->update(true);
+		objs.push_back(temp);
+		tree0Arr.push_back(temp->model);
+	}
 }
 
 void initSprites(LPDIRECT3DDEVICE9 dxDevice)
@@ -12080,6 +12106,8 @@ void drawFrame(LPDIRECT3DDEVICE9 dxDevice)
 
 		DEBUG_HR_START(&hrsbstart);
 		drawZBackToFront(zSortedObjs, zsoLocalIndexes, dxDevice, &ddat, DF_default);
+		if (tree0Arr.size() > 0)
+			tree0model->drawMany(dxDevice, &ddat, &tree0Arr.front(), tree0Arr.size(), DF_default);
 		DEBUG_DX_FLUSH();
 		DEBUG_HR_ACCEND(&hrsbstart, &hrsbend, &hrdrawObjsTime);
 
@@ -12463,6 +12491,8 @@ void drawScene(LPDIRECT3DDEVICE9 dxDevice, drawData* ddat, UNCRZ_view* view, DWO
 
 		mapObj->draw(dxDevice, ddat, drawArgs);
 		drawZBackToFront(zSortedObjs, view->zsoLocalIndexes, dxDevice, ddat, drawArgs);
+		if (tree0Arr.size() > 0)
+			tree0model->drawMany(dxDevice, ddat, &tree0Arr.front(), tree0Arr.size(), DF_default);
 
 		// colour
 		if (fireSprites.size() > 0)
@@ -12502,6 +12532,8 @@ void drawScene(LPDIRECT3DDEVICE9 dxDevice, drawData* ddat, UNCRZ_view* view, DWO
 
 		DEBUG_HR_START(&hrsbstart);
 		drawZBackToFront(zSortedObjs, view->zsoLocalIndexes, dxDevice, ddat, drawArgs);
+		if (tree0Arr.size() > 0)
+			tree0model->drawMany(dxDevice, ddat, &tree0Arr.front(), tree0Arr.size(), DF_default);
 		DEBUG_DX_FLUSH();
 		DEBUG_HR_ACCEND(&hrsbstart, &hrsbend, &hrdrawObjsTime);
 
@@ -12636,6 +12668,9 @@ void drawLight(LPDIRECT3DDEVICE9 dxDevice, lightData* ld)
 	//dxDevice->SetRenderState(D3DRS_ZWRITEENABLE, true);
 	mapObj->draw(dxDevice, &ddat, DF_light);
 	drawZBackToFront(zSortedObjs, ld->zsoLocalIndexes, dxDevice, &ddat, DF_light);
+	if (tree0Arr.size() > 0)
+		tree0model->drawMany(dxDevice, &ddat, &tree0Arr.front(), tree0Arr.size(), DF_default);
+
 	if (fireSprites.size() > 0)
 		fireSprite->draw(dxDevice, &ddat, &sbuff, &fireSprites.front(), 0, fireSprites.size(), DF_light, SD_default);
 	if (smokeSprites.size() > 0)
@@ -12719,6 +12754,7 @@ void initViews(LPDIRECT3DDEVICE9 dxDevice)
 	tempView->projectionFar = 1500;
 	views.push_back(tempView);
 
+	float waterHeight = 0;
 	float waterTexScale = 0.5;
 	tempView = new UNCRZ_view("main_under");
 	tempView->camPos = D3DXVECTOR3(-30, 20, -30);
@@ -12736,7 +12772,7 @@ void initViews(LPDIRECT3DDEVICE9 dxDevice)
 	tempView->clearColor = D3DCOLOR_XRGB(0, 0, 0);
 	tempView->projectionNear = 1;
 	tempView->projectionFar = 1500;
-	tempView->setClip(0, 0, 1, 0, 0, true);
+	tempView->setClip(0, 0, 1, 0, waterHeight, true);
 	tempView->useClips = true;
 	views.push_back(tempView);
 
@@ -12756,7 +12792,7 @@ void initViews(LPDIRECT3DDEVICE9 dxDevice)
 	tempView->clearColor = D3DCOLOR_XRGB(0, 0, 0);
 	tempView->projectionNear = 1;
 	tempView->projectionFar = 1500;
-	tempView->setClip(0, 0, -1, 0, 0.4, true);
+	tempView->setClip(0, 0, -1, 0, waterHeight + 0.4, true);
 	tempView->useClips = true;
 	views.push_back(tempView);
 
@@ -12787,7 +12823,7 @@ void initOvers(LPDIRECT3DDEVICE9 dxDevice)
 	tempOver->useTex3 = true;
 	createTexture(dxDevice, "ui/overtex3.tga", &tempOver->tex3, &textures);
 	tempOver->alphaMode = AM_nice;
-	tempOver->clearView = true;
+	tempOver->clearView = false;
 	tempOver->clearColor = D3DCOLOR_XRGB(0, 0, 0);
 	tempOver->colMod = D3DXVECTOR4(1, 1, 1, 1);
 	overs.push_back(tempOver);

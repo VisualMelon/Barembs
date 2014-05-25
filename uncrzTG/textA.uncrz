@@ -15,6 +15,21 @@ end flow
 end anim
 
 
+anim tree0_idle
+model tree0
+
+flow 0
+
+motion a
+noupdate
+duration 10000
+end motion
+
+end flow
+
+end anim
+
+
 anim clouds_idle
 model clouds
 
