@@ -672,6 +672,8 @@ VS_Output_Tex VShade_TexNoTti_Lit##lightName##(VS_Input_Tex inp) \
 VS_Output_Dyn VShade_Tex_DynOrtho(VS_Input_Tex inp)
 {
 	VS_Output_Dyn outp = (VS_Output_Dyn)0;
+	inp.pos = mul(inp.pos, transarr[inp.tti]);
+	inp.nrm = mul(inp.nrm, transarr[inp.tti]);
 	outp.pos = mul(inp.pos, viewProj);
 	outp.altPos = outp.pos;
 	outp.altPos.z = outp.altPos.z * outp.altPos.w * invFarDepth;
@@ -683,6 +685,8 @@ VS_Output_Dyn VShade_Tex_DynOrtho(VS_Input_Tex inp)
 VS_Output_Dyn VShade_Tex_DynPersp(VS_Input_Tex inp)
 {
 	VS_Output_Dyn outp = (VS_Output_Dyn)0;
+	inp.pos = mul(inp.pos, transarr[inp.tti]);
+	inp.nrm = mul(inp.nrm, transarr[inp.tti]);
 	outp.pos = mul(inp.pos, viewProj);
 	outp.altPos = outp.pos;
 	outp.altPos.z = outp.altPos.z * outp.altPos.w * invFarDepth;

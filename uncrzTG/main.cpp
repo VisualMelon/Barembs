@@ -2187,7 +2187,7 @@ public:
 		}
 	}
 
-#define section_drawPrims_res(batchCount) res = dxDevice->DrawIndexedPrimitive(D3DPT_TRIANGLELIST, 0, 0, numVertices * batchCopies, vOffset * batchCopies, vLen * batchCount);
+#define section_drawPrims_res(batchCount) res = dxDevice->DrawIndexedPrimitive(D3DPT_TRIANGLELIST, 0, 0, numVertices * batchCount, vOffset * batchCopies, vLen * batchCount);
 
 	// doesn't support any alphaMode except AM_none
 	// doesn't support any custom effect settings other than tti
@@ -10486,6 +10486,7 @@ char* windowText = "Barembs";
 int windowSizeX = 1000;
 int windowSizeY = 700;
 
+D3DXVECTOR3 camFocus(0.0f, 3.0f, 0.0f);
 D3DXVECTOR3 camPos(0.0f, 40.0f, 0.0f);
 float rotY = 0;
 float rotPar = 0.0f;
@@ -11059,59 +11060,62 @@ void handleUiAfter(uiEvent* uie)
 		{
 			D3DXVECTOR3 dirVec;
 
+			float rotD = 0.05f;
 			if (keyDown[VK_UP])
 			{
-				rotPar -= 0.1f;
-				targRotPar -= 0.1f;
+				rotPar -= rotD;
+				targRotPar -= rotD;
 			}
 			if (keyDown[VK_DOWN])
 			{
-				rotPar += 0.1f;
-				targRotPar += 0.1f;
+				rotPar += rotD;
+				targRotPar += rotD;
 			}
 			if (keyDown[VK_RIGHT])
 			{
-				rotY -= 0.1f;
-				targRotY -= 0.1f;
+				rotY += rotD;
+				targRotY += rotD;
 			}
 			if (keyDown[VK_LEFT])
 			{
-				rotY += 0.1f;
-				targRotY += 0.1f;
+				rotY -= rotD;
+				targRotY -= rotD;
 			}
-			if (keyDown[VK_SPACE])
-			{
-				//D3DXSaveTextureToFile("mehReflect.bmp", D3DXIFF_BMP, waterReflectTex, NULL);
-				//D3DXSaveTextureToFile("mehRefract.bmp", D3DXIFF_BMP, waterRefractTex, NULL);
-				//D3DXSaveTextureToFile("mehUnder.bmp", D3DXIFF_BMP, underTex, NULL);
-				//D3DXSaveTextureToFile("mehLight.bmp", D3DXIFF_BMP, lights[2]->lightTex, NULL);
-				//D3DXSaveTextureToFile("mehSun.bmp", D3DXIFF_BMP, lights[0]->lightTex, NULL);
-
-				//D3DXSaveTextureToFile("mehSide.bmp", D3DXIFF_BMP, sideTex, NULL);
-				//D3DXSaveTextureToFile("mehTarget.bmp", D3DXIFF_BMP, targetTex, NULL);
-				//D3DXSaveTextureToFile("mehMainV.bmp", D3DXIFF_BMP, views[0]->targetTex, NULL);
-				//D3DXSaveTextureToFile("mehMainO.bmp", D3DXIFF_BMP, overs[0]->targetTex, NULL);
-
+			if (keyDown[VK_PRIOR]) // page up
+			{ // UP
+				camFocus.y += moveVel;
 			}
-			if (keyDown[64 + 23]) // w
+			if (keyDown[VK_NEXT]) // page down
+			{ // DOWN
+				camFocus.y -= moveVel;
+			}
+			if (keyDown['W']) // w
 			{ // FORWARD
-				rotPar -= 0.1f;
-				targRotPar -= 0.1f;
+				dirVec = D3DXVECTOR3(moveVel, 0.0f, 0.0f);
+				D3DXMatrixRotationY(&mehMatrix, rotY);
+				D3DXVec3TransformNormal(&dirVec, &dirVec, &mehMatrix);
+				camFocus += dirVec;
 			}
-			if (keyDown[64 + 1]) // a
+			if (keyDown['A']) // a
 			{ // LEFT
-				rotY += 0.1f;
-				targRotY += 0.1f;
+				dirVec = D3DXVECTOR3(moveVel, 0.0f, 0.0f);
+				D3DXMatrixRotationY(&mehMatrix, rotY - D3DX_PI * 0.5f);
+				D3DXVec3TransformNormal(&dirVec, &dirVec, &mehMatrix);
+				camFocus += dirVec;
 			}
-			if (keyDown[64 + 19]) // s
+			if (keyDown['S']) // s
 			{ // BACKWARD
-				rotPar += 0.1f;
-				targRotPar += 0.1f;
+				dirVec = D3DXVECTOR3(moveVel, 0.0f, 0.0f);
+				D3DXMatrixRotationY(&mehMatrix, rotY - D3DX_PI);
+				D3DXVec3TransformNormal(&dirVec, &dirVec, &mehMatrix);
+				camFocus += dirVec;
 			}
-			if (keyDown[64 + 4]) // d
+			if (keyDown['D']) // d
 			{ // RIGHT
-				rotY -= 0.1f;
-				targRotY -= 0.1f;
+				dirVec = D3DXVECTOR3(moveVel, 0.0f, 0.0f);
+				D3DXMatrixRotationY(&mehMatrix, rotY + D3DX_PI * 0.5f);
+				D3DXVec3TransformNormal(&dirVec, &dirVec, &mehMatrix);
+				camFocus += dirVec;
 			}
 		}
 		break;
@@ -11531,7 +11535,7 @@ void eval()
 	int winHeight = crect.bottom - crect.top;
 
 	// get normaled vecs
-	camPos = D3DXVECTOR3(0.0f, 3.0f, 0.0f);
+	camPos = camFocus;
 
 	D3DXMATRIX mehMatrix;
 	D3DXVECTOR3 dirVec = D3DXVECTOR3(80.0f, 0.0f, 0.0f);
@@ -12213,7 +12217,7 @@ void initObjs(LPDIRECT3DDEVICE9 dxDevice)
 
 	tree0model = getModel(&models, "tree0");
 	tree0model->changeAnim(getFBF_anim(&anims, "tree0_idle"));
-	for (int i = 0; i < 3000; i++)
+	for (int i = 0; i < 1500; i++)
 	{
 		temp = new UNCRZ_obj(new UNCRZ_model(tree0model));
 
@@ -12227,7 +12231,7 @@ again:
 		temp->rotation.y = (float)rnd(314159) / 5000.0;
 
 		temp->update(true);
-		objs.push_back(temp);
+		//objs.push_back(temp);
 		tree0Arr.push_back(temp->model);
 	}
 }
@@ -13408,7 +13412,7 @@ void initLights(LPDIRECT3DDEVICE9 dxDevice)
 
 		ld->lightEnabled = true;
 		ld->lightType = LT_point;
-		ld->lightDepth = 30;
+		ld->lightDepth = 25;
 		ld->lightDir = D3DXVECTOR4(0, 0, 1, 0.0); // not used
 		ld->lightPos = D3DXVECTOR4(0, 10, 0, 0.0);
 		ld->lightUp = D3DXVECTOR3(1, 0, 0); // not used

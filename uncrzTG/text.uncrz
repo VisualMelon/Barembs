@@ -29571,10 +29571,11 @@ colmod 1 1 1 1
 technique simpleTex_alpha
 technique_light simpleTex_alpha_light
 technique_decal simple_decal
-technique_dyndecal simple_dynamicdecal
+technique_dyndecal simpleTex_dynamicdecal
 technique_over over
 texture tree0_tall.tga
 lighting full
+dyndecals nodraw
 alpha none
 
 f 0 2 1
