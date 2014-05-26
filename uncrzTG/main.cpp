@@ -1380,6 +1380,8 @@ public:
 
 	UNCRZ_FBF_anim_inst* animInst;
 
+	int highTti; // max tti (need to know so we can offset batch copies)
+	int batchCopies; // number of batch copies
 	void* vertexArray; // array of vertices
 	short* indexArray; // array of indicies
 
@@ -1389,6 +1391,7 @@ public:
 	void allSegsRequireUpdate();
 	void update(LPD3DXMATRIX trans, bool forceUpdate = false);
 	void drawMany(LPDIRECT3DDEVICE9 dxDevice, drawData* ddat, UNCRZ_model** arr, int count, DWORD drawArgs);
+	void drawBatched(LPDIRECT3DDEVICE9 dxDevice, drawData* ddat, UNCRZ_model** arr, int count, DWORD drawArgs);
 	void draw(LPDIRECT3DDEVICE9 dxDevice, drawData* ddat, DWORD drawArgs);
 	void drawBBoxDebug(LPDIRECT3DDEVICE9 dxDevice, drawData* ddat);
 	UNCRZ_model();
@@ -1432,7 +1435,25 @@ struct UNCRZ_trans_arr
 			arr.push_back(D3DXMATRIX());
 	}
 
-	UNCRZ_trans_arr() { }
+	void compound_append(UNCRZ_trans_arr* tarr)
+	{
+		for (int i = 0; i < tarr->len; i++)
+		{
+			arr.push_back(tarr->arr[i]);
+			len++;
+		}
+	}
+
+	void compound_clear()
+	{
+		arr.clear();
+		len = 0;
+	}
+
+	UNCRZ_trans_arr()
+	{
+		len = 0;
+	}
 };
 
 struct UNCRZ_effect
@@ -2090,10 +2111,11 @@ public:
 	DWORD alphaMode;
 	DWORD lightingMode;
 
-	int vOffset; // in Indices
-	int vLen; // in Triangles
+	int batchCopies; // number of batch copies (same as model)
+	int vOffset; // in Indices (needs multiplying by batchcopies)
+	int vLen; // in Triangles (needs multiplying by number of copies sent in batch)
 
-	int numVertices; // needed for DrawIndexedPrim call
+	int numVertices; // needed for DrawIndexedPrim call (needs multiplying by number of copies sent in batch) (same as model)
 
 	// decals?
 	std::vector<UNCRZ_decal*> decals;
@@ -2165,6 +2187,378 @@ public:
 		}
 	}
 
+#define section_drawPrims_res(batchCount) res = dxDevice->DrawIndexedPrimitive(D3DPT_TRIANGLELIST, 0, 0, numVertices * batchCopies, vOffset * batchCopies, vLen * batchCount);
+
+	// doesn't support any alphaMode except AM_none
+	// doesn't support any custom effect settings other than tti
+	void drawBatched(LPDIRECT3DDEVICE9 dxDevice, drawData* ddat, UNCRZ_model** arr, int count, int secIndex, DWORD drawArgs)
+	{
+		HRESULT res;
+
+		ddat->enableClip(dxDevice);
+
+		int batchCount = 0;
+		UNCRZ_trans_arr comboTarr;
+
+		// model
+		if (drawArgs & DF_light)
+		{
+			effect.setTechnique(lightTech);
+			effect.setLightType(ddat->lightType);
+			effect.setLightDepth(ddat->lightDepth);
+			effect.setLightConeness(ddat->lightConeness);
+		}
+		else
+		{
+			effect.setTechnique(tech);
+			effect.setLightCoof(ddat->lightCoof);
+			effect.setFarDepth(ddat->farDepth);
+		}
+
+		setTextures();
+		setMats();
+
+		effect.setEyePos(&ddat->eyePos);
+		effect.setEyeDir(&ddat->eyeDir);
+		effect.setTicker(ddat->ticker);
+		effect.setViewProj(ddat->viewProj);
+
+		effect.effect->CommitChanges();
+
+		setAlpha(dxDevice);
+
+		UINT numPasses, pass;
+		effect.effect->Begin(&numPasses, 0);
+
+		// pass 0
+		if (drawArgs & DF_light)
+			effect.effect->BeginPass((int)ddat->lightType);
+		else if (ddat->performPlainPass)
+			effect.effect->BeginPass(0);
+		else
+			goto skipPlainPass;
+
+		if (vertexType == VX_PC || vertexType == VX_PCT)
+			effect.setcolMod(&colMod.x);
+
+		for (int i = count - 1; i >= 0; i--)
+		{
+			if (arr[i]->sections[secIndex]->curDrawCull)
+				continue;
+
+			comboTarr.compound_append(arr[i]->transArr);
+			batchCount++;
+
+			if (batchCount == batchCopies)
+			{
+				effect.setTransArr(&comboTarr);
+				effect.effect->CommitChanges();
+				section_drawPrims_res(batchCount);
+				comboTarr.compound_clear();
+				batchCount = 0;
+			}
+		}
+
+		if (batchCount != 0)
+		{
+			effect.setTransArr(&comboTarr);
+			effect.effect->CommitChanges();
+			section_drawPrims_res(batchCount);
+			comboTarr.compound_clear();
+			batchCount = 0;
+		}
+
+		effect.effect->EndPass();
+skipPlainPass:
+
+		if (lightingMode == LM_full && numPasses > 1 && (drawArgs & DF_light) == false)
+		{
+			// enable blend
+			dxDevice->SetRenderState(D3DRS_ALPHABLENDENABLE, TRUE);
+			dxDevice->SetRenderState(D3DRS_BLENDOP, D3DBLENDOP_ADD);
+			dxDevice->SetRenderState(D3DRS_SRCBLEND, D3DBLEND_ONE);
+			dxDevice->SetRenderState(D3DRS_DESTBLEND, D3DBLEND_ONE);
+
+			// light pass
+			for (int ldi = ddat->lightDatas.size() - 1; ldi >= 0; ldi--)
+			{
+				lightData* ld = ddat->lightDatas[ldi];
+				
+				if (!ld->lightEnabled)
+					continue;
+				
+				effect.setLightData(ld);
+				effect.effect->CommitChanges();
+
+				effect.effect->BeginPass((int)ld->lightType + 1);
+				for (int i = count - 1; i >= 0; i--)
+				{
+					if (arr[i]->sections[secIndex]->curDrawCull || ld->canSkip(&arr[i]->modelBox))
+						continue;
+					
+					comboTarr.compound_append(arr[i]->transArr);
+					batchCount++;
+
+					if (batchCount == batchCopies)
+					{
+						effect.setTransArr(&comboTarr);
+						effect.effect->CommitChanges();
+						section_drawPrims_res(batchCount);
+						comboTarr.compound_clear();
+						batchCount = 0;
+					}
+				}
+
+				if (batchCount != 0)
+				{
+					effect.setTransArr(&comboTarr);
+					effect.effect->CommitChanges();
+					section_drawPrims_res(batchCount);
+					comboTarr.compound_clear();
+					batchCount = 0;
+				}
+				effect.effect->EndPass();
+			}
+
+		}
+		// disable blend
+		dxDevice->SetRenderState(D3DRS_ALPHABLENDENABLE, FALSE);
+
+		effect.effect->End();
+
+		/*UINT numPasses, pass;
+		effect.effect->Begin(&numPasses, 0);
+
+		for (pass = 0; pass < numPasses; pass++)
+		{
+			effect.effect->BeginPass(pass);
+
+			for (int i = count - 1; i >= 0; i--)
+			{
+				if (vertexType == VX_PC || vertexType == VX_PCT)
+					effect.setcolMod(&arr[i]->sections[secIndex]->colMod.x);
+				effect.setTransArr(arr[i]->transArr);
+				effect.effect->CommitChanges();
+				res = dxDevice->DrawIndexedPrimitive(D3DPT_TRIANGLELIST, 0, 0, numVertices, vOffset, vLen);
+				if (res != D3D_OK)
+					res = res;
+			}
+
+			effect.effect->EndPass();
+		}
+
+		effect.effect->End();*/
+
+		if (drawArgs & DF_light)
+			return; // no decals for light
+		if (drawDecals == false)
+			goto skipToDynamicDecals;
+
+		// decals
+		dxDevice->SetVertexDeclaration(vertexDecPAT4);
+		effect.setTechnique(decalTech);
+
+		effect.effect->CommitChanges();
+
+		dxDevice->SetRenderState(D3DRS_ALPHABLENDENABLE, TRUE);
+		dxDevice->SetRenderState(D3DRS_BLENDOP, D3DBLENDOP_ADD);
+		dxDevice->SetRenderState(D3DRS_SRCBLEND, D3DBLEND_ONE);
+		dxDevice->SetRenderState(D3DRS_DESTBLEND, D3DBLEND_INVSRCALPHA);
+
+		effect.effect->Begin(&numPasses, 0);
+
+		// pass 0
+		if (drawArgs & DF_light)
+			effect.effect->BeginPass((int)ddat->lightType);
+		else if (ddat->performPlainPass)
+			effect.effect->BeginPass(0);
+		else
+			goto skipPlainDecalPass;
+
+		for (int i = count - 1; i >= 0; i--)
+		{
+			UNCRZ_section* curSec = arr[i]->sections[secIndex];
+			if (curSec->curDrawCull)
+				continue;
+			if (curSec->decals.size() != 0)
+			{
+				effect.setcolMod(&arr[i]->sections[secIndex]->colMod.x);
+				effect.setTransArr(arr[i]->transArr);
+
+				//for (int i = curSec->decals.size() - 1; i >= 0; i--)
+				for (int i = 0; i < curSec->decals.size(); i++)
+				{
+					effect.setTexture(curSec->decals[i]->tex);
+					effect.effect->CommitChanges();
+					res = dxDevice->DrawPrimitiveUP(D3DPT_TRIANGLELIST, curSec->decals[i]->numFaces, curSec->decals[i]->vertexArray, sizeof(vertexPAT4));
+					if (res != D3D_OK)
+						res = res;
+				}
+			}
+		}
+		effect.effect->EndPass();
+skipPlainDecalPass:
+
+		if (lightingMode == LM_full && numPasses > 1 && (drawArgs & DF_light) == false)
+		{
+			// enable blend
+			dxDevice->SetRenderState(D3DRS_ALPHABLENDENABLE, TRUE);
+			dxDevice->SetRenderState(D3DRS_BLENDOP, D3DBLENDOP_ADD);
+			dxDevice->SetRenderState(D3DRS_SRCBLEND, D3DBLEND_ONE);
+			dxDevice->SetRenderState(D3DRS_DESTBLEND, D3DBLEND_ONE);
+
+			// light pass
+			for (int ldi = ddat->lightDatas.size() - 1; ldi >= 0; ldi--)
+			{
+				lightData* ld = ddat->lightDatas[ldi];
+				
+				if (!ld->lightEnabled)
+					continue;
+
+				effect.setLightData(ld);
+				effect.effect->CommitChanges();
+
+				effect.effect->BeginPass((int)ld->lightType + 1);
+				for (int i = count - 1; i >= 0; i--)
+				{
+					UNCRZ_section* curSec = arr[i]->sections[secIndex];
+
+					if (curSec->decals.size() != 0)
+					{
+						effect.setcolMod(&arr[i]->sections[secIndex]->colMod.x);
+						effect.setTransArr(arr[i]->transArr);
+
+						//for (int i = curSec->decals.size() - 1; i >= 0; i--)
+						for (int i = 0; i < curSec->decals.size(); i++)
+						{
+							effect.setTexture(curSec->decals[i]->tex);
+							effect.effect->CommitChanges();
+							res = dxDevice->DrawPrimitiveUP(D3DPT_TRIANGLELIST, curSec->decals[i]->numFaces, curSec->decals[i]->vertexArray, sizeof(vertexPAT4));
+							if (res != D3D_OK)
+								res = res;
+						}
+					}
+				}
+				effect.effect->EndPass();
+			}
+
+			// disable blend
+			dxDevice->SetRenderState(D3DRS_ALPHABLENDENABLE, FALSE);
+		}
+
+		effect.effect->End();
+
+		dxDevice->SetRenderState(D3DRS_ALPHABLENDENABLE, FALSE);
+
+		/*effect.effect->Begin(&numPasses, 0);
+
+		for (pass = 0; pass < numPasses; pass++)
+		{
+			effect.effect->BeginPass(pass);
+
+			for (int i = count - 1; i >= 0; i--)
+			{
+				UNCRZ_section* curSec = arr[i]->sections[secIndex];
+				if (curSec->decals.size() != 0)
+				{
+					effect.setcolMod(&arr[i]->sections[secIndex]->colMod.x);
+					effect.setTransArr(arr[i]->transArr);
+
+					//for (int i = curSec->decals.size() - 1; i >= 0; i--)
+					for (int i = 0; i < curSec->decals.size(); i++)
+					{
+						effect.setTexture(curSec->decals[i]->tex);
+						effect.effect->CommitChanges();
+						res = dxDevice->DrawPrimitiveUP(D3DPT_TRIANGLELIST, curSec->decals[i]->numFaces, curSec->decals[i]->vertexArray, sizeof(vertexPAT4));
+						if (res != D3D_OK)
+							res = res;
+					}
+				}
+			}
+
+			effect.effect->EndPass();
+		}
+
+		effect.effect->End();*/
+
+		// dynamic decals (DO NOT GET CONFUSED WITH LIGHTS) - wow: so untested
+skipToDynamicDecals:
+		if (ddat->dynamicDecalDatas.size() == 0)
+			return;
+
+		//ddat->startTimer(true);
+
+		// disable z write
+		dxDevice->SetRenderState(D3DRS_ZWRITEENABLE, false);
+
+		effect.setTechnique(dynamicDecalTech);
+		
+		effect.effect->Begin(&numPasses, 0);
+
+		if (numPasses > 0 && (drawArgs & DF_light) == false)
+		{
+			// enable blend
+			dxDevice->SetRenderState(D3DRS_ALPHABLENDENABLE, TRUE);
+			dxDevice->SetRenderState(D3DRS_BLENDOP, D3DBLENDOP_ADD);
+			dxDevice->SetRenderState(D3DRS_SRCBLEND, D3DBLEND_SRCALPHA);
+			dxDevice->SetRenderState(D3DRS_DESTBLEND, D3DBLEND_INVSRCALPHA);
+
+			// dynamic decal pass
+			for (int dddi = ddat->dynamicDecalDatas.size() - 1; dddi >= 0; dddi--)
+			{
+				dynamicDecalData* ddd = ddat->dynamicDecalDatas[dddi];
+				
+				if (!ddd->decalEnabled)
+					continue;
+
+				effect.setDynamicDecalData(ddd);
+				effect.effect->CommitChanges();
+
+				effect.effect->BeginPass((int)ddd->lightType);
+
+				for (int i = count - 1; i >= 0; i--)
+				{
+					UNCRZ_section* curSec = arr[i]->sections[secIndex];
+					if (ddd->canSkip(&arr[i]->modelBox) || curSec->drawDynamicDecals == false)
+						continue;
+
+					comboTarr.compound_append(arr[i]->transArr);
+					batchCount++;
+
+					if (batchCount == batchCopies)
+					{
+						effect.setTransArr(&comboTarr);
+						effect.effect->CommitChanges();
+						section_drawPrims_res(batchCount);
+						comboTarr.compound_clear();
+						batchCount = 0;
+					}
+				}
+
+				if (batchCount != 0)
+				{
+					effect.setTransArr(&comboTarr);
+					effect.effect->CommitChanges();
+					section_drawPrims_res(batchCount);
+					comboTarr.compound_clear();
+					batchCount = 0;
+				}
+
+				effect.effect->EndPass();
+			}
+
+		}
+		// disable blend
+		dxDevice->SetRenderState(D3DRS_ALPHABLENDENABLE, FALSE);
+
+		// re-enable z write
+		dxDevice->SetRenderState(D3DRS_ZWRITEENABLE, true);
+		
+		//ddat->stopTimer(1, true, "DynDecals: ", GDOF_dms);
+
+		effect.effect->End();
+	}
+	
 	// doesn't support any alphaMode except AM_none
 	void drawMany(LPDIRECT3DDEVICE9 dxDevice, drawData* ddat, UNCRZ_model** arr, int count, int secIndex, DWORD drawArgs)
 	{
@@ -2216,12 +2610,16 @@ public:
 				continue;
 			if (vertexType == VX_PC || vertexType == VX_PCT)
 				effect.setcolMod(&arr[i]->sections[secIndex]->colMod.x);
+			
 			effect.setTransArr(arr[i]->transArr);
 			effect.effect->CommitChanges();
-			res = dxDevice->DrawIndexedPrimitive(D3DPT_TRIANGLELIST, 0, 0, numVertices, vOffset, vLen);
+
+			section_drawPrims_res(1);
+
 			if (res != D3D_OK)
 				res = res;
 		}
+
 		effect.effect->EndPass();
 skipPlainPass:
 
@@ -2253,7 +2651,7 @@ skipPlainPass:
 						effect.setcolMod(&arr[i]->sections[secIndex]->colMod.x);
 					effect.setTransArr(arr[i]->transArr);
 					effect.effect->CommitChanges();
-					res = dxDevice->DrawIndexedPrimitive(D3DPT_TRIANGLELIST, 0, 0, numVertices, vOffset, vLen);
+					section_drawPrims_res(1);
 					if (res != D3D_OK)
 						res = res;
 				}
@@ -2467,7 +2865,7 @@ skipToDynamicDecals:
 
 					effect.effect->CommitChanges();
 
-					res = dxDevice->DrawIndexedPrimitive(D3DPT_TRIANGLELIST, 0, 0, numVertices, vOffset, vLen);
+					section_drawPrims_res(1);
 					if (res != D3D_OK)
 						res = res;
 				}
@@ -2638,7 +3036,7 @@ skipToDynamicDecals:
 		else
 			goto skipPlainPass;
 
-		res = dxDevice->DrawIndexedPrimitive(D3DPT_TRIANGLELIST, 0, 0, numVertices, vOffset, vLen);
+		section_drawPrims_res(1);
 		if (res != D3D_OK)
 			res = res;
 		effect.effect->EndPass();
@@ -2664,7 +3062,7 @@ skipPlainPass:
 				effect.effect->CommitChanges();
 
 				effect.effect->BeginPass((int)ld->lightType + 1);
-				res = dxDevice->DrawIndexedPrimitive(D3DPT_TRIANGLELIST, 0, 0, numVertices, vOffset, vLen);
+				section_drawPrims_res(1);
 				if (res != D3D_OK)
 					res = res;
 				effect.effect->EndPass();
@@ -2826,7 +3224,7 @@ skipToDynamicDecals:
 				effect.effect->CommitChanges();
 
 				effect.effect->BeginPass((int)ddd->lightType);
-				res = dxDevice->DrawIndexedPrimitive(D3DPT_TRIANGLELIST, 0, 0, numVertices, vOffset, vLen);
+				section_drawPrims_res(1);
 				if (res != D3D_OK)
 					res = res;
 				effect.effect->EndPass();
@@ -2878,6 +3276,7 @@ skipToDynamicDecals:
 		effect = gin->effect;
 		vOffset = gin->vOffset;
 		vLen = gin->vLen;
+		batchCopies = gin->batchCopies;
 		numVertices = gin->numVertices;
 		vertexType = gin->vertexType;
 		drawDecals = gin->drawDecals;
@@ -3579,6 +3978,39 @@ void UNCRZ_model::drawBBoxDebug(LPDIRECT3DDEVICE9 dxDevice, drawData* ddat)
 	effect.effect->End();
 }
 
+void UNCRZ_model::drawBatched(LPDIRECT3DDEVICE9 dxDevice, drawData* ddat, UNCRZ_model** arr, int count, DWORD drawArgs)
+{
+	bool res; // true means it will be culled
+	for (int i = count - 1; i >= 0; i--)
+	{
+		res = true;
+		if (noCull || arr[i]->modelBox.dothSurviveClipTransformed(ddat->viewProj))
+		{
+			res = false;
+			goto set;
+		}
+set:
+		if (res == true)
+			ddat->cullCount++;
+		else
+			ddat->drawCount++;
+		for (int j = sections.size() - 1; j >= 0; j--)
+		{
+			arr[i]->sections[j]->curDrawCull = res;
+		}
+	}
+
+	dxDevice->SetVertexDeclaration(vertexDec);
+	dxDevice->SetStreamSource(0, vBuff, 0, stride);
+	dxDevice->SetIndices(iBuff);
+
+	int len = sections.size();
+	for (int i = len - 1; i >= 0; i--)
+	{
+		sections[i]->drawBatched(dxDevice, ddat, arr, count, i, drawArgs);
+	}
+}
+
 void UNCRZ_model::drawMany(LPDIRECT3DDEVICE9 dxDevice, drawData* ddat, UNCRZ_model** arr, int count, DWORD drawArgs)
 {
 	bool res; // true means it will be culled
@@ -3649,6 +4081,7 @@ notOcced:
 
 UNCRZ_model::UNCRZ_model()
 {
+	batchCopies = 1;
 	animInst = NULL;
 }
 
@@ -3669,6 +4102,7 @@ UNCRZ_model::UNCRZ_model(UNCRZ_model* gin)
 		sections.push_back(new UNCRZ_section(ss));
 	}
 
+	batchCopies = gin->batchCopies;
 	vBuff = gin->vBuff;
 	iBuff = gin->iBuff;
 	vertexArray = gin->vertexArray;
@@ -3679,15 +4113,17 @@ UNCRZ_model::UNCRZ_model(UNCRZ_model* gin)
 	numVertices = gin->numVertices;
 	numIndices = gin->numIndices;
 	noCull = gin->noCull;
+	highTti = gin->highTti;
 
 	transArr = new UNCRZ_trans_arr();
-	transArr->create((int)allSegs.size() * 2);
+	transArr->create(highTti + 1);
 	
 	animInst = new UNCRZ_FBF_anim_inst(this, gin->animInst->anim);
 }
 
 UNCRZ_model::UNCRZ_model(std::string nameN)
 {
+	batchCopies = 1;
 	name = nameN;
 	animInst = NULL;
 	noCull = false;
@@ -3731,17 +4167,56 @@ void UNCRZ_model::clearDecals()
 	}
 }
 
+// fill/create methods rely on accurate highTti and batchCopies
 void UNCRZ_model::fillVBuff()
 {
 	VOID* buffPtr;
-	vBuff->Lock(0, numVertices * stride, (VOID**)&buffPtr, D3DLOCK_DISCARD);
-	memcpy(buffPtr, vertexArray, numVertices * stride);
+	vBuff->Lock(0, numVertices * stride * batchCopies, (VOID**)&buffPtr, D3DLOCK_DISCARD);
+
+	if (batchCopies == 1)
+	{
+		memcpy(buffPtr, vertexArray, numVertices * stride);
+	}
+	else
+	{
+		int ttiOffset = 0;
+
+		// madness ensues
+		for (int i = 0; i < batchCopies; i++)
+		{
+			BYTE* copyPtr = (BYTE*)buffPtr + i * numVertices * stride;
+			memcpy(copyPtr, vertexArray, numVertices * stride);
+
+			// sort out ttiOffset for batch copies
+			if (i > 0)
+			{
+				ttiOffset += highTti + 1; // 1 makes it the count
+
+				if (vertexType == VX_PC)
+				{
+					vertexPC* vPCs = (vertexPC*)copyPtr;
+					for (int j = 0; j < numVertices; j++)
+					{
+						vPCs[j].tti += ttiOffset;
+					}
+				}
+				else if (vertexType == VX_PCT)
+				{
+					vertexPCT* vPCTs = (vertexPCT*)copyPtr;
+					for (int j = 0; j < numVertices; j++)
+					{
+						vPCTs[j].tti += ttiOffset;
+					}
+				}
+			}
+		}
+	}
 	vBuff->Unlock();
 }
 
 void UNCRZ_model::createVBuff(LPDIRECT3DDEVICE9 dxDevice, void* vds)
 {
-	dxDevice->CreateVertexBuffer(numVertices * stride, D3DUSAGE_WRITEONLY, D3DFVF_XYZRHW | D3DFVF_DIFFUSE, D3DPOOL_DEFAULT, &vBuff, NULL);
+	dxDevice->CreateVertexBuffer(numVertices * stride * batchCopies, D3DUSAGE_WRITEONLY, D3DFVF_XYZRHW | D3DFVF_DIFFUSE, D3DPOOL_DEFAULT, &vBuff, NULL);
 
 	vertexArray = malloc(stride * numVertices);
 	memcpy(vertexArray, vds, numVertices * stride);
@@ -3752,14 +4227,45 @@ void UNCRZ_model::createVBuff(LPDIRECT3DDEVICE9 dxDevice, void* vds)
 void UNCRZ_model::fillIBuff()
 {
 	VOID* buffPtr;
-	iBuff->Lock(0, numIndices * sizeof (short), (VOID**)&buffPtr, D3DLOCK_DISCARD);
-	memcpy(buffPtr, indexArray, numIndices * sizeof (short));
+	iBuff->Lock(0, numIndices * sizeof (short) * batchCopies, (VOID**)&buffPtr, D3DLOCK_DISCARD);
+
+	if (batchCopies == 1)
+	{
+		memcpy(buffPtr, indexArray, numIndices * sizeof (short));
+	}
+	else
+	{
+		// madness ensues
+		for each (UNCRZ_section* sec in sections)
+		{
+			BYTE* secPtr = (BYTE*)buffPtr + sec->vOffset * sizeof (short) * batchCopies;
+
+			int idxOffset = 0;
+			for (int i = 0; i < batchCopies; i++)
+			{
+				BYTE* copyPtr = secPtr + i * sec->vLen * 3 * sizeof (short);
+				memcpy(copyPtr, indexArray + sec->vOffset, sec->vLen * 3 * sizeof (short));
+
+				if (i > 0)
+				{
+					idxOffset += numVertices;
+
+					short* idxs = (short*)copyPtr;
+					for (int j = 0; j < sec->vLen * 3; j++)
+					{
+						idxs[j] += idxOffset;
+					}
+				}
+			}
+		}
+	}
+
 	iBuff->Unlock();
 }
 
 void UNCRZ_model::createIBuff(LPDIRECT3DDEVICE9 dxDevice, short* ids)
 {
-	dxDevice->CreateIndexBuffer(numIndices * sizeof (short), D3DUSAGE_WRITEONLY, D3DFMT_INDEX16, D3DPOOL_DEFAULT, &iBuff, NULL);
+	dxDevice->CreateIndexBuffer(numIndices * sizeof (short) * batchCopies, D3DUSAGE_WRITEONLY, D3DFMT_INDEX16, D3DPOOL_DEFAULT, &iBuff, NULL);
 
 	indexArray = (short*)malloc(sizeof (short) * numIndices);
 	memcpy(indexArray, ids, numIndices * sizeof (short));
@@ -3767,6 +4273,7 @@ void UNCRZ_model::createIBuff(LPDIRECT3DDEVICE9 dxDevice, short* ids)
 	fillIBuff();
 }
 
+// collision methods and such
 bool UNCRZ_model::collides(D3DXVECTOR3* rayPos, D3DXVECTOR3* rayDir, float* distRes)
 {
 	// bbox collision
@@ -4654,6 +5161,12 @@ public:
 	{
 		// no noDraw check here
 		model->drawMany(dxDevice, ddat, arr, count, drawArgs);
+	}
+
+	void drawBatched(LPDIRECT3DDEVICE9 dxDevice, drawData* ddat, UNCRZ_model** arr, int count, DWORD drawArgs)
+	{
+		// no noDraw check here
+		model->drawBatched(dxDevice, ddat, arr, count, drawArgs);
 	}
 
 	void draw(LPDIRECT3DDEVICE9 dxDevice, drawData* ddat, DWORD drawArgs)
@@ -6210,6 +6723,29 @@ void loadModelsFromFile(char* fileName, LPDIRECT3DDEVICE9 dxDevice, std::vector<
 				{
 					if (data[1] == "mdl")
 					{
+						// find highTti pass batchcopies to all section
+						curModel->highTti = 0;
+						for each (UNCRZ_segment* seg in curModel->allSegs)
+						{
+							if (seg->transIndex > curModel->highTti)
+							{
+								curModel->highTti = seg->transIndex;
+
+								for each (UNCRZ_blend* blnd in seg->blends)
+								{
+									if (blnd->transIndex > curModel->highTti)
+									{
+										curModel->highTti = blnd->transIndex;
+									}
+								}
+							}
+						}
+						for each (UNCRZ_section* sec in curModel->sections)
+						{
+							sec->batchCopies = curModel->batchCopies;
+						}
+
+						// sort out verts
 						if (vertexType == VX_PC)
 						{
 							for (int i = latePlaceTtis.size() - 1; i >= 0; i--)
@@ -6238,14 +6774,19 @@ void loadModelsFromFile(char* fileName, LPDIRECT3DDEVICE9 dxDevice, std::vector<
 							curModel->numVertices = (int)vPCTs.size();
 							curModel->createVBuff(dxDevice, (void*)&vPCTs.front());
 						}
+
 						curModel->numIndices = (int)indices.size();
 						curModel->createIBuff(dxDevice, (short*)&indices.front());
+
+						// clearnup
 						vPCs.clear();
 						vPCTs.clear();
 						indices.clear();
 						latePlaceTtis.clear();
+
+						// finish up
 						curModel->transArr = new UNCRZ_trans_arr();
-						curModel->transArr->create((int)curModel->allSegs.size() * 2);
+						curModel->transArr->create(curModel->highTti + 1);
 						curModel->createSegmentBoxes();
 						modelList->push_back(curModel);
 
@@ -6339,6 +6880,10 @@ oldSeg:
 					curSection->vOffset = (int)indices.size();
 
 					curModel->sections.push_back(curSection);
+				}
+				else if (data[0] == "batchcopies")
+				{
+					curModel->batchCopies = stoi(data[1]);
 				}
 				else if (data[0] == "shader_dx9")
 				{
@@ -11668,7 +12213,7 @@ void initObjs(LPDIRECT3DDEVICE9 dxDevice)
 
 	tree0model = getModel(&models, "tree0");
 	tree0model->changeAnim(getFBF_anim(&anims, "tree0_idle"));
-	for (int i = 0; i < 1000; i++)
+	for (int i = 0; i < 3000; i++)
 	{
 		temp = new UNCRZ_obj(new UNCRZ_model(tree0model));
 
@@ -12107,7 +12652,7 @@ void drawFrame(LPDIRECT3DDEVICE9 dxDevice)
 		DEBUG_HR_START(&hrsbstart);
 		drawZBackToFront(zSortedObjs, zsoLocalIndexes, dxDevice, &ddat, DF_default);
 		if (tree0Arr.size() > 0)
-			tree0model->drawMany(dxDevice, &ddat, &tree0Arr.front(), tree0Arr.size(), DF_default);
+			tree0model->drawBatched(dxDevice, &ddat, &tree0Arr.front(), tree0Arr.size(), DF_default);
 		DEBUG_DX_FLUSH();
 		DEBUG_HR_ACCEND(&hrsbstart, &hrsbend, &hrdrawObjsTime);
 
@@ -12492,7 +13037,7 @@ void drawScene(LPDIRECT3DDEVICE9 dxDevice, drawData* ddat, UNCRZ_view* view, DWO
 		mapObj->draw(dxDevice, ddat, drawArgs);
 		drawZBackToFront(zSortedObjs, view->zsoLocalIndexes, dxDevice, ddat, drawArgs);
 		if (tree0Arr.size() > 0)
-			tree0model->drawMany(dxDevice, ddat, &tree0Arr.front(), tree0Arr.size(), DF_default);
+			tree0model->drawBatched(dxDevice, ddat, &tree0Arr.front(), tree0Arr.size(), DF_default);
 
 		// colour
 		if (fireSprites.size() > 0)
@@ -12533,7 +13078,7 @@ void drawScene(LPDIRECT3DDEVICE9 dxDevice, drawData* ddat, UNCRZ_view* view, DWO
 		DEBUG_HR_START(&hrsbstart);
 		drawZBackToFront(zSortedObjs, view->zsoLocalIndexes, dxDevice, ddat, drawArgs);
 		if (tree0Arr.size() > 0)
-			tree0model->drawMany(dxDevice, ddat, &tree0Arr.front(), tree0Arr.size(), DF_default);
+			tree0model->drawBatched(dxDevice, ddat, &tree0Arr.front(), tree0Arr.size(), DF_default);
 		DEBUG_DX_FLUSH();
 		DEBUG_HR_ACCEND(&hrsbstart, &hrsbend, &hrdrawObjsTime);
 
@@ -12669,7 +13214,7 @@ void drawLight(LPDIRECT3DDEVICE9 dxDevice, lightData* ld)
 	mapObj->draw(dxDevice, &ddat, DF_light);
 	drawZBackToFront(zSortedObjs, ld->zsoLocalIndexes, dxDevice, &ddat, DF_light);
 	if (tree0Arr.size() > 0)
-		tree0model->drawMany(dxDevice, &ddat, &tree0Arr.front(), tree0Arr.size(), DF_default);
+		tree0model->drawBatched(dxDevice, &ddat, &tree0Arr.front(), tree0Arr.size(), DF_default);
 
 	if (fireSprites.size() > 0)
 		fireSprite->draw(dxDevice, &ddat, &sbuff, &fireSprites.front(), 0, fireSprites.size(), DF_light, SD_default);

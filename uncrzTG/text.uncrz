@@ -29503,6 +29503,7 @@ mdl tree0
 
 vertex PCT
 manualnormals
+batchcopies 30
 
 
 seg tree
